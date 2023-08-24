@@ -7,7 +7,7 @@ import datetime as dt
 import decimal as dec
 import logging
 import pandas as pd
-from enum import StrEnum
+from enum import Enum
 
 FACTOR = 1_000
 SECOND = 1
@@ -15,14 +15,15 @@ MILLISECOND = SECOND * FACTOR
 MICROSECOND = MILLISECOND * FACTOR
 
 
-class ProcessStatus(StrEnum):
+class ProcessStatus(Enum):
     D = "uninterruptible sleep"
-    I = "idle"
+    I = "idle"  # noqa: E741
     R = "running"
     S = "sleeping"
     T = "stopped by job control signal"
     t = "stopped by debugger during trace"
     Z = "zombie"
+
 
 class Process(NamedTuple):
     """Process class.
@@ -41,6 +42,7 @@ class Process(NamedTuple):
         time: Process total CPU Time
         command: Command used to start the process
     """
+
     pid: int
     user: str
     pr: int
@@ -55,7 +57,21 @@ class Process(NamedTuple):
     command: str
 
     @classmethod
-    def from_line(cls: "Process", pid: str, user: str, pr: str, ni: str, virt: str, res: str, shr: str, s: str, cpu: str, mem: str, time: str, command: str) -> "Process":
+    def from_line(
+        cls: "Process",
+        pid: str,
+        user: str,
+        pr: str,
+        ni: str,
+        virt: str,
+        res: str,
+        shr: str,
+        s: str,
+        cpu: str,
+        mem: str,
+        time: str,
+        command: str,
+    ) -> "Process":
         i_pid = int(pid)
         i_pr = int(pr)
         i_ni = int(ni)
@@ -71,7 +87,20 @@ class Process(NamedTuple):
         i_seconds = int(f_seconds)
         i_microsecond = int((f_seconds % 1) * MICROSECOND)
         t_time = dt.time(minute=i_minutes, second=i_seconds, microsecond=i_microsecond)
-        return cls(pid=i_pid, user=user, pr=i_pr, ni=i_ni, virt=i_virt, res=i_res, shr=i_shr, s=ps_s, cpu=d_cpu, mem=d_mem, time=t_time, command=command)
+        return cls(
+            pid=i_pid,
+            user=user,
+            pr=i_pr,
+            ni=i_ni,
+            virt=i_virt,
+            res=i_res,
+            shr=i_shr,
+            s=ps_s,
+            cpu=d_cpu,
+            mem=d_mem,
+            time=t_time,
+            command=command,
+        )
 
 
 class Top(NamedTuple):
@@ -88,9 +117,33 @@ class Top(NamedTuple):
     mem_list: list[dec.Decimal] = []
     time_list: list[dt.time] = []
 
+    @classmethod
+    def from_process(cls: "Top", process: "Process") -> "Top":
+        return Top(
+            pid=process.pid,
+            user=process.user,
+            pr_list=[process.pr],
+            ni_list=[process.ni],
+            virt_list=[process.virt],
+            res_list=[process.res],
+            shr_list=[process.shr],
+            s_list=[process.s],
+            cpu_list=[process.cpu],
+            mem_list=[process.mem],
+            time_list=[process.time],
+            command=process.command,
+        )
+
 
 class DB:
     _database: dict[int, Top] = {}
+
+    def pidof(self: "DB") -> dict[int, str]:
+        pids: dict[int, str] = {}
+        for pid, process in self._database.items():
+            pids[pid] = process.command
+        return pids
+
 
     def append(self: "DB", process: Process) -> None:
         pid = process.pid
@@ -120,80 +173,126 @@ class DB:
 def process_client(path: Path) -> DB:
     print(f"Processing {path}...")
     db = DB()  # database
+    count = 0
     with (path / "top.log").open(encoding="utf8", newline="\n") as log:
         for line in log:
-            try:
-                process = Process.from_line(*line.split())
-            except TypeError as error:
-                logging.exception(error)
-            else:
-                top = db.get(process.pid)
-                if top is None:
-                    top = Top(pid=process.pid, user=process.user, command=process.command)
-                    db.set(top)
-                db.append(process)
+            count += 1
+            process = Process.from_line(*line.split())
+            top = db.get(process.pid)
+            if top is None:
+                top = Top.from_process(process)
+                db.set(top)
+            db.append(process)
     return db
 
 
-root_path = Path("data") / "5g"
-
-for content in root_path.iterdir():
-    if content.name == "comtrade":
-        continue
-    db = process_client(content / "client")
-
-    pidof = {3528: "ptp4l", 3518: "tcpdump", 3523: "tcpdump", 2678: "poetry"}
-    # pid = 3528  # ptp4l
-    # pid = 3518  # tcpdump
-    # pid = 3523  # tcpdump
-    # pid = 2678  # poetry
-
+def plot_virtual_mem(ax, db: DB, pidof: dict[int, str], name: str):
     # Virtual MEM by Process
-    # TODO *_list is holding ALL data (not only the specific process data)
     virts = []
-    for pid in db._database.keys():
-        virt = pd.DataFrame(db.get(pid).virt_list, columns=[pidof[pid]])
+    for pid in pidof.keys():
+        virt = pd.DataFrame(db.get(pid).virt_list, columns=[f"{pid} [{pidof[pid]}]"])
         virts.append(virt)
     process = pd.concat(virts, axis=1)
-    dfm = process.melt(var_name='Process', value_name='Virtual memory size (KiB)', ignore_index=False)
-    sns.lineplot(x=dfm.index, y="Virtual memory size (KiB)", hue='Process', data=dfm)
+    dfm = process.reset_index().melt(
+        id_vars="index", var_name="Process", value_name="Virtual memory size (KiB)",
+    )
+    plot = sns.lineplot(x="index", y="Virtual memory size (KiB)", hue="Process", data=dfm, ax=ax)
+    plot.set(title=name)
+    return plot
 
-    # # CPU x MEM Percentage
-    # process_cpu = pd.DataFrame(db.get(pid).cpu_list, columns=['cpu'])
-    # process_mem = pd.DataFrame(db.get(pid).mem_list, columns=['mem'])
-    # process = process_cpu.merge(process_mem, left_index=True, right_index=True)
-    # dfm = process.melt(var_name='type', value_name='percentage', ignore_index=False)
-    # sns.lineplot(x=dfm.index, y="percentage", hue='type', data=dfm).set(title=f"{pid}: {pidof[pid]}")
 
-    # # Priority
-    # process_pr = pd.DataFrame(db.get(pid).pr_list, columns=['pr'])
-    # process_ni = pd.DataFrame(db.get(pid).ni_list, columns=['ni'])
-    # process = process_pr.merge(process_ni, left_index=True, right_index=True)
-    # dfm = process.melt(var_name='type', value_name='value', ignore_index=False)
-    # sns.lineplot(x=dfm.index, y="value", hue='type', data=dfm).set(title=f"{pid}: {pidof[pid]}")
+def plot_cpu_x_mem(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+    # CPU x MEM Percentage
+    process_cpu = pd.DataFrame(db.get(pid).cpu_list, columns=['cpu'])
+    process_mem = pd.DataFrame(db.get(pid).mem_list, columns=['mem'])
+    process = process_cpu.merge(process_mem, left_index=True, right_index=True)
+    dfm = process.melt(var_name='type', value_name='percentage', ignore_index=False)
+    sns.lineplot(x=dfm.index, y="percentage", hue="type", data=dfm).set(
+        title=f"{name}: {pid} [{pidof[pid]}]"
+    )
 
-    # # Memory
-    # process_virt = pd.DataFrame(db.get(pid).virt_list, columns=['virt'])
-    # process_res = pd.DataFrame(db.get(pid).res_list, columns=['res'])
-    # process_shr = pd.DataFrame(db.get(pid).shr_list, columns=['shr'])
-    # process = process_virt.merge(process_res, left_index=True, right_index=True)
-    # process = process.merge(process_shr, left_index=True, right_index=True)
-    # dfm = process.melt(var_name='type', value_name='KiB', ignore_index=False)
-    # sns.lineplot(x=dfm.index, y="KiB", hue='type', data=dfm).set(title=f"{pid}: {pidof[pid]}")
 
-    # # Status
-    # process = pd.DataFrame(db.get(pid).s_list, columns=['status'])
-    # sns.lineplot(x=process.index, y=process.status).set(title=f"{pid}: {pidof[pid]}")
+def plot_priority(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+    # Priority
+    process_pr = pd.DataFrame(db.get(pid).pr_list, columns=['pr'])
+    process_ni = pd.DataFrame(db.get(pid).ni_list, columns=['ni'])
+    process = process_pr.merge(process_ni, left_index=True, right_index=True)
+    dfm = process.melt(var_name='type', value_name='value', ignore_index=False)
+    sns.lineplot(x=dfm.index, y="value", hue="type", data=dfm).set(
+        title=f"{name}: {pid} [{pidof[pid]}]"
+    )
 
-    # # Total CPU Time
-    # process = pd.DataFrame(db.get(pid).time_list, columns=['time'])
-    # process = process.applymap(lambda x: ((x.hour*60+x.minute)*60+x.second)*10**6+x.microsecond)
-    # sns.lineplot(x=process.index, y=process.time).set(title=f"{pid}: {pidof[pid]}")
 
-    # process = db.get(pid)
-    # for cpu, mem, time in zip(process.cpu_list, process.mem_list, process.time_list):
-    #     print(cpu, mem, time)
-    # exit()
+def plot_memory(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+    # Memory
+    process_virt = pd.DataFrame(db.get(pid).virt_list, columns=['virt'])
+    process_res = pd.DataFrame(db.get(pid).res_list, columns=['res'])
+    process_shr = pd.DataFrame(db.get(pid).shr_list, columns=['shr'])
+    process = process_virt.merge(process_res, left_index=True, right_index=True)
+    process = process.merge(process_shr, left_index=True, right_index=True)
+    dfm = process.melt(var_name='type', value_name='KiB', ignore_index=False)
+    sns.lineplot(x=dfm.index, y="KiB", hue="type", data=dfm).set(
+        title=f"{name}: {pid} [{pidof[pid]}]"
+    )
 
-    plt.show()
-    break
+
+def plot_status(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+    # Status
+    # TODO bad code, improve it
+    status_list = db.get(pid).s_list
+    status_name_list = []
+    for status in db.get(pid).s_list:
+        status_name_list.append(f"{status.name}: {status.value}")
+    process = pd.DataFrame(status_name_list, columns=['status'])
+    sns.lineplot(x=process.index, y=process.status).set(
+        title=f"{name}: {pid} [{pidof[pid]}]"
+    )
+
+
+def plot_cpu_time(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+    # Total CPU Time
+    process = pd.DataFrame(db.get(pid).time_list, columns=['time (s)'])
+    process = process.applymap(
+        lambda x: ((x.hour * 60 + x.minute) * 60 + x.second) + (x.microsecond / 10**6)
+    )
+    sns.lineplot(x=process.index, y=process['time (s)']).set(
+        title=f"{name}: {pid} [{pidof[pid]}]"
+    )
+
+
+def main() -> None:
+    root_path = Path("data") / "5g"
+    plots_path = Path('plots')
+    plots_path.mkdir(exist_ok=True)
+
+    # sns.set()
+    sns.set_palette('coolwarm')
+
+    for content in root_path.iterdir():
+        if content.name == "comtrade":
+            continue
+        for host in ('client', 'server'):
+            db = process_client(content / host)
+            pidof = db.pidof()
+
+            # plt.figure()
+            # fig = plt.figure(figsize=(10, 10))
+            fig, ax = plt.subplots()
+
+            plot = plot_virtual_mem(ax, db, pidof, content.name)
+            # fig = plot.get_figure()
+            fig.savefig(plots_path / f'{content.name}-{host}-virtual-mem.png')
+            # plt.show()
+
+            for pid in pidof.keys():
+                # plot_cpu_x_mem(db, pidof, pid, content.name)
+                # plot_priority(db, pidof, pid, content.name)
+                # plot_memory(db, pidof, pid, content.name)
+                # plot_status(db, pidof, pid, content.name)
+                # plot_cpu_time(db, pidof, pid, content.name)
+                # plt.show()
+                pass
+
+
+if __name__ == "__main__":
+    main()
