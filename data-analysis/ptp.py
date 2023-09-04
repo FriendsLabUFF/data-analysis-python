@@ -17,10 +17,10 @@ with open("data/5g/01logs/client/ptp.log", "r") as log:
         if not data[0].startswith("master"):
             continue
 
-        offset_value = int(data[2]) / 1_000
+        offset_value = int(data[2]) / 1_000  # ns to us
         if offset_value > 359362165:
             continue
-        freq_value = int(data[5]) / 1_000
+        freq_value = int(data[5]) / 1_000  # ns to us
 
         ptp_list.append([time, offset_value, "Offset"])
         # TODO parts per billion (ppb), meaning???
