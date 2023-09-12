@@ -1,11 +1,19 @@
 import matplotlib.pyplot as plt
-import matplotlib.axes as axes
 import pandas as pd
 import seaborn as sns
 import os
 
 dir_path = os.getcwd().removesuffix('data-analysis')
 dir_path += 'data/5g'
+
+rc = {
+    'figure.figsize': (8, 4),
+    'axes.facecolor': 'white',
+    'axes.grid': True,
+    'grid.color': '.8',
+    'font.size': 30}
+
+plt.rcParams.update(rc)
 
 for folder in os.listdir(dir_path):
 
@@ -16,7 +24,7 @@ for folder in os.listdir(dir_path):
     ptp_list = []
 
     with open(f"{dir_path}/{folder}/client/ptp.log", "r") as log:
-        
+
         for line in log:
             time, data = line.split(":", 1)
 
@@ -40,10 +48,11 @@ for folder in os.listdir(dir_path):
     df_ptp_list = pd.DataFrame(
         ptp_list, columns=["Time (s)", "Synchronism (us)", "Type"]
     )
-    # print(df_ptp_list)
-    
-    sns.lineplot(x="Time (s)", y="Synchronism (us)", hue="Type", data=df_ptp_list)
+
     sns.set_theme(style="darkgrid")
 
-    plt.show()
-    plt.savefig(f"{folder}.pdf",  bbox_inches="tight")
+    sns.relplot(x="Time (s)", y="Synchronism (us)",
+                hue="Type", data=df_ptp_list, linewidth=1,
+                height=6, aspect=18/8, kind="line")
+
+    plt.savefig(f"{folder}.pdf")
