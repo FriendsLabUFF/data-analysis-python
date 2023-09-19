@@ -13,6 +13,7 @@ FACTOR = 1_000
 SECOND = 1
 MILLISECOND = SECOND * FACTOR
 MICROSECOND = MILLISECOND * FACTOR
+EXTENSION = '.png'
 
 
 class ProcessStatus(Enum):
@@ -99,7 +100,7 @@ class Process(NamedTuple):
             cpu=d_cpu,
             mem=d_mem,
             time=t_time,
-            command=command,
+            command=command.replace('python3', 'pd_client'),
         )
 
 
@@ -136,14 +137,15 @@ class Top(NamedTuple):
 
 
 class DB:
-    _database: dict[int, Top] = {}
+
+    def __init__(self: "DB") -> None:
+        self._database: dict[int, Top] = {}
 
     def pidof(self: "DB") -> dict[int, str]:
         pids: dict[int, str] = {}
         for pid, process in self._database.items():
             pids[pid] = process.command
         return pids
-
 
     def append(self: "DB", process: Process) -> None:
         pid = process.pid
@@ -170,11 +172,17 @@ class DB:
         self._database[pid] = top
 
 
-def process_client(path: Path) -> DB:
+def process_top(path: Path) -> DB:
     print(f"Processing {path}...")
     db = DB()  # database
     count = 0
-    with (path / "top.log").open(encoding="utf8", newline="\n") as log:
+
+    if (path / "top.log").exists():
+        filepath = path / "top.log"
+    else:
+        filepath = path / "top.txt"
+
+    with filepath.open(encoding="utf8", newline="\n") as log:
         for line in log:
             count += 1
             process = Process.from_line(*line.split())
@@ -186,7 +194,7 @@ def process_client(path: Path) -> DB:
     return db
 
 
-def plot_virtual_mem(ax, db: DB, pidof: dict[int, str], name: str):
+def plot_virtual_mem(db: DB, pidof: dict[int, str], name: str, path: Path) -> None:
     # Virtual MEM by Process
     virts = []
     for pid in pidof.keys():
@@ -196,34 +204,55 @@ def plot_virtual_mem(ax, db: DB, pidof: dict[int, str], name: str):
     dfm = process.reset_index().melt(
         id_vars="index", var_name="Process", value_name="Virtual memory size (KiB)",
     )
-    plot = sns.lineplot(x="index", y="Virtual memory size (KiB)", hue="Process", data=dfm, ax=ax)
-    plot.set(title=name)
-    return plot
+
+    plt.figure()
+    sns.lineplot(x="index", y="Virtual memory size (KiB)", hue="Process", data=dfm).set(title=name)
+    new_path = path.parent / '01 Virtual Memory by Host'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
-def plot_cpu_x_mem(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+def plot_cpu_x_mem(db: DB, pidof: dict[int, str], pid: int, name: str, path: Path) -> None:
     # CPU x MEM Percentage
     process_cpu = pd.DataFrame(db.get(pid).cpu_list, columns=['cpu'])
     process_mem = pd.DataFrame(db.get(pid).mem_list, columns=['mem'])
     process = process_cpu.merge(process_mem, left_index=True, right_index=True)
     dfm = process.melt(var_name='type', value_name='percentage', ignore_index=False)
+
+    process_name = pidof[pid]
+    plt.figure()
     sns.lineplot(x=dfm.index, y="percentage", hue="type", data=dfm).set(
-        title=f"{name}: {pid} [{pidof[pid]}]"
+        title=f"{name} = {pid} [{process_name}]"
     )
+    new_path = path.parent / '02 CPU x Memory by Process'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + f'-{process_name}_{pid}' + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
-def plot_priority(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+def plot_priority(db: DB, pidof: dict[int, str], pid: int, name: str, path: Path) -> None:
     # Priority
     process_pr = pd.DataFrame(db.get(pid).pr_list, columns=['pr'])
     process_ni = pd.DataFrame(db.get(pid).ni_list, columns=['ni'])
     process = process_pr.merge(process_ni, left_index=True, right_index=True)
     dfm = process.melt(var_name='type', value_name='value', ignore_index=False)
+
+    process_name = pidof[pid]
+    plt.figure()
     sns.lineplot(x=dfm.index, y="value", hue="type", data=dfm).set(
-        title=f"{name}: {pid} [{pidof[pid]}]"
+        title=f"{name} = {pid} [{process_name}]"
     )
+    new_path = path.parent / '03 Priority by Process'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + f'-{process_name}_{pid}' + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
-def plot_memory(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+def plot_memory(db: DB, pidof: dict[int, str], pid: int, name: str, path: Path) -> None:
     # Memory
     process_virt = pd.DataFrame(db.get(pid).virt_list, columns=['virt'])
     process_res = pd.DataFrame(db.get(pid).res_list, columns=['res'])
@@ -231,12 +260,20 @@ def plot_memory(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
     process = process_virt.merge(process_res, left_index=True, right_index=True)
     process = process.merge(process_shr, left_index=True, right_index=True)
     dfm = process.melt(var_name='type', value_name='KiB', ignore_index=False)
+
+    process_name = pidof[pid]
+    plt.figure()
     sns.lineplot(x=dfm.index, y="KiB", hue="type", data=dfm).set(
-        title=f"{name}: {pid} [{pidof[pid]}]"
+        title=f"{name} = {pid} [{pidof[pid]}]"
     )
+    new_path = path.parent / '04 Memory by Process'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + f'-{process_name}_{pid}' + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
-def plot_status(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+def plot_status(db: DB, pidof: dict[int, str], pid: int, name: str, path: Path) -> None:
     # Status
     # TODO bad code, improve it
     status_list = db.get(pid).s_list
@@ -244,54 +281,88 @@ def plot_status(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
     for status in db.get(pid).s_list:
         status_name_list.append(f"{status.name}: {status.value}")
     process = pd.DataFrame(status_name_list, columns=['status'])
+
+    process_name = pidof[pid]
+    plt.figure()
     sns.lineplot(x=process.index, y=process.status).set(
-        title=f"{name}: {pid} [{pidof[pid]}]"
+        title=f"{name} = {pid} [{pidof[pid]}]"
     )
+    new_path = path.parent / '05 Status by Process'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + f'-{process_name}_{pid}' + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
-def plot_cpu_time(db: DB, pidof: dict[int, str], pid: int, name: str) -> None:
+def plot_cpu_time(db: DB, pidof: dict[int, str], pid: int, name: str, path: Path) -> None:
     # Total CPU Time
-    process = pd.DataFrame(db.get(pid).time_list, columns=['time (s)'])
+    process = pd.DataFrame(db.get(pid).time_list, columns=['CPU Time (s)'])
     process = process.applymap(
         lambda x: ((x.hour * 60 + x.minute) * 60 + x.second) + (x.microsecond / 10**6)
     )
-    sns.lineplot(x=process.index, y=process['time (s)']).set(
-        title=f"{name}: {pid} [{pidof[pid]}]"
+
+    process_name = pidof[pid]
+    plt.figure()
+    sns.lineplot(x=process.index, y=process['CPU Time (s)']).set(
+        title=f"{name} = {pid} [{pidof[pid]}]"
     )
+    new_path = path.parent / '06 CPU Time by Process'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + f'-{process_name}_{pid}' + EXTENSION))
+    # plt.show()
+    plt.close()
+
+
+def plot_cpu_time_by_host(db: DB, pidof: dict[int, str], name: str, path: Path) -> None:
+    # Virtual MEM by Process
+    cpu_times = []
+    for pid in pidof.keys():
+        cpu_time = pd.DataFrame(db.get(pid).time_list, columns=[f"{pid} [{pidof[pid]}]"])
+        cpu_time = cpu_time.applymap(
+            lambda x: ((x.hour * 60 + x.minute) * 60 + x.second) + (x.microsecond / 10 ** 6)
+        )
+        cpu_times.append(cpu_time)
+    process = pd.concat(cpu_times, axis=1)
+    dfm = process.reset_index().melt(
+        id_vars="index", var_name="Process", value_name='CPU Time (s)',
+    )
+
+    plt.figure()
+    sns.lineplot(x="index", y='CPU Time (s)', hue="Process", data=dfm).set(title=name)
+    new_path = path.parent / '07 CPU Time (s) by Host'
+    new_path.mkdir(exist_ok=True)
+    plt.savefig(new_path / (path.name + EXTENSION))
+    # plt.show()
+    plt.close()
 
 
 def main() -> None:
-    root_path = Path("data") / "5g"
+    root_path = Path("data")
     plots_path = Path('plots')
     plots_path.mkdir(exist_ok=True)
 
     # sns.set()
     sns.set_palette('coolwarm')
 
-    for content in root_path.iterdir():
-        if content.name == "comtrade":
-            continue
-        for host in ('client', 'server'):
-            db = process_client(content / host)
-            pidof = db.pidof()
+    for experiment_type in root_path.iterdir():
+        for content in experiment_type.iterdir():
+            if content.name == "comtrade":
+                continue
+            for host in content.iterdir():
+                db = process_top(host)
+                pidof = db.pidof()
 
-            # plt.figure()
-            # fig = plt.figure(figsize=(10, 10))
-            fig, ax = plt.subplots()
+                pdf_path = plots_path / f'{experiment_type.name}_{content.name}_{host.name}'
+                name = f'{experiment_type.name} > {content.name}: {host.name}'
 
-            plot = plot_virtual_mem(ax, db, pidof, content.name)
-            # fig = plot.get_figure()
-            fig.savefig(plots_path / f'{content.name}-{host}-virtual-mem.png')
-            # plt.show()
-
-            for pid in pidof.keys():
-                # plot_cpu_x_mem(db, pidof, pid, content.name)
-                # plot_priority(db, pidof, pid, content.name)
-                # plot_memory(db, pidof, pid, content.name)
-                # plot_status(db, pidof, pid, content.name)
-                # plot_cpu_time(db, pidof, pid, content.name)
-                # plt.show()
-                pass
+                plot_virtual_mem(db, pidof, name, pdf_path)
+                for pid in pidof.keys():
+                    plot_cpu_x_mem(db, pidof, pid, name, pdf_path)
+                    plot_priority(db, pidof, pid, name, pdf_path)
+                    plot_memory(db, pidof, pid, name, pdf_path)
+                    plot_status(db, pidof, pid, name, pdf_path)
+                    plot_cpu_time(db, pidof, pid, name, pdf_path)
+                plot_cpu_time_by_host(db, pidof, name, pdf_path)
 
 
 if __name__ == "__main__":
