@@ -1,5 +1,7 @@
 # code
 plots/
+*.pdf
+data/
 
 # pycharm
 .idea
