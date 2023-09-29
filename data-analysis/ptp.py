@@ -1,10 +1,11 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-import os
+from pathlib import Path
 
-dir_path = os.getcwd().removesuffix('data-analysis')
-dir_path += 'data/'
+logs_path = Path('plots') / 'ptp'
+logs_path.mkdir(exist_ok=True)
+dir_path = Path('data')
 
 rc = {
     'figure.figsize': (8, 4),
@@ -15,16 +16,16 @@ rc = {
 
 plt.rcParams.update(rc)
 
-for directory in os.listdir(dir_path):
-    for folder in os.listdir(dir_path+directory):
+for directory in dir_path.iterdir():
+    for folder in directory.iterdir():
 
-        if folder[2:] != "logs":
+        if folder.name == "comtrade":
             continue
 
         times = []
         ptp_list = []
 
-        with open(f"{dir_path}/{directory}/{folder}/client/ptp.log", "r") as log:
+        with (folder / 'client' / 'ptp.log').open() as log:
 
             for line in log:
                 time, data = line.split(":", 1)
@@ -36,8 +37,8 @@ for directory in os.listdir(dir_path):
                     continue
 
                 offset_value = int(data[2]) / 1_000  # ns to us
-                # if offset_value > 359362165:
-                #     continue
+                if offset_value > 1000:
+                    continue
                 freq_value = int(data[5]) / 1_000  # ns to us
 
                 ptp_list.append([time, offset_value, "Offset"])
@@ -56,4 +57,4 @@ for directory in os.listdir(dir_path):
                     hue="Type", data=df_ptp_list, linewidth=1,
                     height=6, aspect=18/8, kind="line")
 
-        plt.savefig(f"{directory}-{folder}.png")
+        plt.savefig(logs_path / f"{directory.name}-{folder.name}.png")
